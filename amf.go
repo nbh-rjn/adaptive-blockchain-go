@@ -21,17 +21,23 @@ const (
 	maxShardCapacity = 5 // maximum blocks in a shard before rebalancing
 )
 
-// Adds a block to the shard with fewest blocks (simple adaptive sharding)
+// Adds a block to the shard with fewest blocks (adaptive + dynamic rebalancing + consensus)
 func addBlockToShards(data string, validator string) {
-	// Find shard with fewest blocks
+	// Smarter shard selection based on load score: fewer blocks + penalty for imbalance
 	target := 0
+	minScore := len(merkleForest[0].Blocks)
 	for i := 1; i < len(merkleForest); i++ {
-		if len(merkleForest[i].Blocks) < len(merkleForest[target].Blocks) {
+		blockCount := len(merkleForest[i].Blocks)
+		loadScore := blockCount
+		if blockCount > maxShardCapacity-1 {
+			loadScore += 2 // temporary penalty
+		}
+		if loadScore < minScore {
 			target = i
+			minScore = loadScore
 		}
 	}
 
-	// Add block to selected shard
 	shard := &merkleForest[target]
 	prevBlock := shard.Blocks[len(shard.Blocks)-1]
 	newBlock := Block{
@@ -44,139 +50,157 @@ func addBlockToShards(data string, validator string) {
 	newBlock.Nonce = mineBlock(newBlock)
 	newBlock.Hash = calculateHash(newBlock)
 
-	// Add block if dBFT approves
 	if dBFTConsensus(newBlock) {
 		shard.Blocks = append(shard.Blocks, newBlock)
 		shard.MerkleRoot = updateMerkleRoot(shard.Blocks)
 
-		// Check if shard size exceeds limit and rebalance if necessary
 		if len(shard.Blocks) > maxShardCapacity {
 			rebalanceShards()
 		}
 
-		// Synchronize state across shards (if needed)
-		// For example, synchronizing with the next shard (example case)
-		// You could sync with another specific shard based on your logic
-		synchronizeStateAcrossShards(target, (target+1)%len(merkleForest)) // Sync with the next shard (circularly)
+		synchronizeStateAcrossShards(target, (target+1)%len(merkleForest))
 	} else {
 		fmt.Println("Block rejected by dBFT.")
 	}
 }
 
-// Simple Merkle root calculation (concatenated block hashes hashed together)
+// Merkle Root update for any block list
 func updateMerkleRoot(blocks []Block) string {
 	if len(blocks) == 0 {
 		return ""
 	}
-	var combinedHashes string
+	var hashes []string
 	for _, block := range blocks {
-		combinedHashes += block.Hash
+		hashes = append(hashes, block.Hash)
 	}
-	sum := sha256.Sum256([]byte(combinedHashes))
-	return hex.EncodeToString(sum[:])
+	for len(hashes) > 1 {
+		var newLevel []string
+		for i := 0; i < len(hashes); i += 2 {
+			right := hashes[i]
+			if i+1 < len(hashes) {
+				right = hashes[i+1]
+			}
+			combined := hashes[i] + right
+			sum := sha256.Sum256([]byte(combined))
+			newLevel = append(newLevel, hex.EncodeToString(sum[:]))
+		}
+		hashes = newLevel
+	}
+	return hashes[0]
 }
 
-// Generate Merkle Proof for a block in a shard (proof of inclusion)
+// Merkle Proof generator
 func generateMerkleProof(shardIndex, blockIndex int) []string {
-	shard := &merkleForest[shardIndex]
-	proof := []string{}
-
-	// Traverse the shard's blocks and generate proof
-	for i := blockIndex + 1; i < len(shard.Blocks); i++ {
-		proof = append(proof, shard.Blocks[i].Hash)
+	blocks := merkleForest[shardIndex].Blocks
+	if blockIndex >= len(blocks) {
+		return nil
 	}
+	var level []string
+	for _, block := range blocks {
+		level = append(level, block.Hash)
+	}
+	var proof []string
+	index := blockIndex
+	for len(level) > 1 {
+		var nextLevel []string
+		for i := 0; i < len(level); i += 2 {
+			left := level[i]
+			right := left
+			if i+1 < len(level) {
+				right = level[i+1]
+			}
+			combined := left + right
+			sum := sha256.Sum256([]byte(combined))
+			nextLevel = append(nextLevel, hex.EncodeToString(sum[:]))
 
+			if i == index || i+1 == index {
+				sibling := right
+				if i+1 == index {
+					sibling = left
+				}
+				proof = append(proof, sibling)
+				index = i / 2
+			}
+		}
+		level = nextLevel
+	}
 	return proof
 }
 
-// Rebalance the shards by moving blocks from the larger shards to smaller ones
+// Rebalance by transferring blocks between shards
 func rebalanceShards() {
-	// Find the shard with the most blocks
-	var maxShardIndex int
+	var maxShardIndex, minShardIndex int
 	maxBlockCount := 0
-	for i, shard := range merkleForest {
-		if len(shard.Blocks) > maxBlockCount {
-			maxShardIndex = i
-			maxBlockCount = len(shard.Blocks)
-		}
-	}
-
-	// Find the shard with the fewest blocks
-	var minShardIndex int
 	minBlockCount := len(merkleForest[0].Blocks)
+
 	for i, shard := range merkleForest {
-		if len(shard.Blocks) < minBlockCount {
+		count := len(shard.Blocks)
+		if count > maxBlockCount {
+			maxShardIndex = i
+			maxBlockCount = count
+		}
+		if count < minBlockCount {
 			minShardIndex = i
-			minBlockCount = len(shard.Blocks)
+			minBlockCount = count
 		}
 	}
 
-	// Move a block from the full shard to the empty one
-	if len(merkleForest[maxShardIndex].Blocks) > len(merkleForest[minShardIndex].Blocks) {
+	if maxShardIndex != minShardIndex && maxBlockCount-minBlockCount > 1 {
 		blockToMove := merkleForest[maxShardIndex].Blocks[len(merkleForest[maxShardIndex].Blocks)-1]
 		merkleForest[maxShardIndex].Blocks = merkleForest[maxShardIndex].Blocks[:len(merkleForest[maxShardIndex].Blocks)-1]
 		merkleForest[minShardIndex].Blocks = append(merkleForest[minShardIndex].Blocks, blockToMove)
 
-		// Update Merkle root after moving block
 		merkleForest[maxShardIndex].MerkleRoot = updateMerkleRoot(merkleForest[maxShardIndex].Blocks)
 		merkleForest[minShardIndex].MerkleRoot = updateMerkleRoot(merkleForest[minShardIndex].Blocks)
 	}
 }
 
-// Synchronize all shards by updating their Merkle roots
+// Updates Merkle roots across all shards
 func synchronizeShards() {
 	for i := range merkleForest {
 		merkleForest[i].MerkleRoot = updateMerkleRoot(merkleForest[i].Blocks)
 	}
 }
 
-// Synchronize State Across Shards using Merkle Proofs and Authentication
+// Cross-shard state sync using Merkle proof
 func synchronizeStateAcrossShards(sourceShardIndex, targetShardIndex int) {
-	// Get source and target shards
 	sourceShard := &merkleForest[sourceShardIndex]
 	targetShard := &merkleForest[targetShardIndex]
 
-	// Generate Merkle Proof for the latest block in the source shard
 	lastBlockIndex := len(sourceShard.Blocks) - 1
 	proof := generateMerkleProof(sourceShardIndex, lastBlockIndex)
-
-	// Cross-shard state transfer: We would transfer necessary data from the source to the target shard.
-	// For simplicity, we will transfer the latest block's data and Merkle root to the target shard.
-
 	blockToTransfer := sourceShard.Blocks[lastBlockIndex]
 
-	// Use the Merkle Proof to authenticate the transfer (simplified process)
-	isValidProof := validateMerkleProof(sourceShardIndex, lastBlockIndex, proof)
-	if !isValidProof {
+	if validateMerkleProof(sourceShardIndex, lastBlockIndex, proof) {
+		targetShard.Blocks = append(targetShard.Blocks, blockToTransfer)
+		synchronizeShards()
+	} else {
 		fmt.Println("Merkle proof validation failed, aborting state transfer.")
-		return
 	}
-
-	// Transfer state to target shard (for now, just append the block)
-	targetShard.Blocks = append(targetShard.Blocks, blockToTransfer)
-	targetShard.MerkleRoot = updateMerkleRoot(targetShard.Blocks)
-
-	// Synchronize the Merkle roots across all shards after state transfer
-	synchronizeShards()
-
-	// Optionally, we could add a mechanism to handle consistency between more than two shards.
-	// This could involve using authenticated data structures or advanced cryptographic techniques.
 }
 
-// Validate Merkle Proof for a given block in a shard
+// Merkle Proof validator
 func validateMerkleProof(shardIndex, blockIndex int, proof []string) bool {
-	shard := &merkleForest[shardIndex]
-	// Recompute the Merkle root by applying the proof in reverse
-	calculatedHash := shard.Blocks[blockIndex].Hash
-	for _, proofHash := range proof {
-		calculatedHash = calculateHashForProof(calculatedHash, proofHash)
+	leaf := merkleForest[shardIndex].Blocks[blockIndex].Hash
+	index := blockIndex
+	hash := leaf
+
+	for _, sibling := range proof {
+		var combined string
+		if index%2 == 0 {
+			combined = hash + sibling
+		} else {
+			combined = sibling + hash
+		}
+		sum := sha256.Sum256([]byte(combined))
+		hash = hex.EncodeToString(sum[:])
+		index /= 2
 	}
 
-	// Compare the recomputed hash with the shard's Merkle root
-	return calculatedHash == shard.MerkleRoot
+	return hash == merkleForest[shardIndex].MerkleRoot
 }
 
-// Helper function to calculate hash during Merkle proof validation
+// Not used directly but kept for completeness
 func calculateHashForProof(leftHash, rightHash string) string {
 	combined := leftHash + rightHash
 	hash := sha256.Sum256([]byte(combined))
