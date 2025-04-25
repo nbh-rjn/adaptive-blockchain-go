@@ -2,56 +2,119 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
+	"time"
 )
 
-// Constants for CAP behavior (Consistency, Availability, Partition Tolerance)
+// Constants for CAP behavior
 const (
 	Consistency = iota
 	Availability
 	PartitionTolerance
 )
 
-var currentState = Consistency // The state can change based on the network condition
+var currentState = Consistency // Can be updated dynamically
+var retryCount = 0
 
-// CAPOrchestrator orchestrates CAP tradeoffs between Consistency, Availability, and Partition Tolerance.
+// CAPOrchestrator orchestrates CAP tradeoffs.
 func CAPOrchestrator() {
+	predictNetworkPartition()
 	switch currentState {
 	case Consistency:
-		fmt.Println("System is in Consistency mode: Ensuring consistency across all shards.")
+		fmt.Println("System is in Consistency mode.")
 		ensureConsistency()
 	case Availability:
-		fmt.Println("System is in Availability mode: Ensuring availability during partition.")
+		fmt.Println("System is in Availability mode.")
 		ensureAvailability()
 	case PartitionTolerance:
-		fmt.Println("System is in Partition Tolerance mode: Handling network partitions.")
+		fmt.Println("System is in Partition Tolerance mode.")
 		ensurePartitionTolerance()
 	default:
-		fmt.Println("Unknown state, defaulting to Consistency.")
+		fmt.Println("Unknown mode. Defaulting to Consistency.")
 		ensureConsistency()
 	}
 }
 
-// ensureConsistency ensures that all shards are consistent and updated.
+// --- Core Modes ---
+
 func ensureConsistency() {
-	// Perform consistency checks across shards and make sure all are synchronized
-	// If needed, block writes to shards that cannot be synchronized.
-	fmt.Println("Checking consistency between all shards...")
-	// Implement consistency checks, e.g., wait for all shards to be in sync before writing.
+	fmt.Println("Ensuring strong consistency...")
 	synchronizeShards()
+	applyVectorClocks()
 }
 
-// ensureAvailability allows the system to remain available even in the event of network partitions.
 func ensureAvailability() {
-	// Allow writes even if some shards cannot be reached. The system will eventually sync them.
-	fmt.Println("Allowing writes to available shards despite partitioning...")
-	// This could be implemented by writing to a shard and marking the update as pending until it is synchronized.
-	// Here we just allow it to go through (for simplicity).
+	fmt.Println("Allowing writes during partition...")
+	markPendingUpdates()
 }
 
-// ensurePartitionTolerance handles the case where the network has been partitioned.
 func ensurePartitionTolerance() {
-	// The system can function even if some shards are unreachable.
-	// For example, it could queue updates and retry synchronization later.
-	fmt.Println("Handling partition tolerance...")
-	// For now, we can implement basic handling, like temporarily disabling some functionality or queuing writes.
+	fmt.Println("Handling partitions with retry and timeout...")
+	retrySynchronization()
+}
+
+func markPendingUpdates() {
+	fmt.Println("Tagging updates as pending for later sync.")
+}
+
+func retrySynchronization() {
+	retryCount++
+	timeout := adaptiveTimeout()
+	fmt.Printf("Retry #%d with timeout %v\n", retryCount, timeout)
+	time.Sleep(timeout)
+}
+
+// --- Adaptive and Advanced Features ---
+
+func adaptiveTimeout() time.Duration {
+	latency := measureNetworkLatency()
+	if latency > 200 {
+		return 5 * time.Second
+	}
+	return 2 * time.Second
+}
+
+func measureNetworkLatency() int {
+	// Simulated latency in milliseconds
+	return rand.Intn(300)
+}
+
+func predictNetworkPartition() {
+	if rand.Float64() < 0.3 {
+		currentState = PartitionTolerance
+		fmt.Println("Predicted network partition: switching mode.")
+	} else if rand.Float64() < 0.5 {
+		currentState = Availability
+		fmt.Println("Network unstable: favoring availability.")
+	} else {
+		currentState = Consistency
+		fmt.Println("Network stable: favoring consistency.")
+	}
+}
+
+func applyVectorClocks() {
+	fmt.Println("Applying vector clocks for causal consistency.")
+	// Vector clock simulation (placeholder)
+}
+
+func detectConflicts() bool {
+	return rand.Float64() < 0.2 // 20% simulated conflict rate
+}
+
+func resolveConflicts() {
+	if detectConflicts() {
+		fmt.Println("Conflict detected! Applying entropy-based resolution...")
+		probabilisticResolution()
+	} else {
+		fmt.Println("No conflict detected.")
+	}
+}
+
+func probabilisticResolution() {
+	prob := rand.Float64()
+	if prob < 0.5 {
+		fmt.Println("Resolution: Accept higher entropy state.")
+	} else {
+		fmt.Println("Resolution: Merge divergent states.")
+	}
 }
