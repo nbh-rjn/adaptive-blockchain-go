@@ -54,6 +54,8 @@ func addBlockToShards(data string, validator string) {
 		shard.Blocks = append(shard.Blocks, newBlock)
 		shard.MerkleRoot = updateMerkleRoot(shard.Blocks)
 
+		updateAMQ(target, newBlock.Hash) // ← Add this line
+
 		if len(shard.Blocks) > maxShardCapacity {
 			rebalanceShards()
 		}
@@ -205,4 +207,51 @@ func calculateHashForProof(leftHash, rightHash string) string {
 	combined := leftHash + rightHash
 	hash := sha256.Sum256([]byte(combined))
 	return hex.EncodeToString(hash[:])
+}
+
+// AMQ Filter (simplified): tracks recent block hashes for efficient presence check
+type AMQFilter struct {
+	HashSet map[string]bool
+}
+
+var amqFilters []AMQFilter
+
+// Initialize AMQ filters
+func initAMQFilters() {
+	for i := 0; i < shardCount; i++ {
+		amqFilters = append(amqFilters, AMQFilter{HashSet: make(map[string]bool)})
+	}
+}
+
+// Update AMQ when block added
+func updateAMQ(shardIndex int, hash string) {
+	amqFilters[shardIndex].HashSet[hash] = true
+}
+
+// Check block presence using AMQ
+func isInAMQ(shardIndex int, hash string) bool {
+	return amqFilters[shardIndex].HashSet[hash]
+}
+
+// Probabilistic Merkle proof compression (truncate each hash to first 8 chars)
+func compressMerkleProof(proof []string) []string {
+	var compressed []string
+	for _, h := range proof {
+		if len(h) >= 8 {
+			compressed = append(compressed, h[:8])
+		}
+	}
+	return compressed
+}
+
+// Cryptographic accumulator snapshot (accumulated XOR of hashes)
+func getAccumulatorSnapshot(shardIndex int) string {
+	acc := make([]byte, 32)
+	for _, block := range merkleForest[shardIndex].Blocks {
+		hashBytes, _ := hex.DecodeString(block.Hash)
+		for i := range acc {
+			acc[i] ^= hashBytes[i]
+		}
+	}
+	return hex.EncodeToString(acc)
 }

@@ -13,7 +13,7 @@ type ValidatorProfile struct {
 	History    int
 	Location   string
 	PublicKey  string
-	StakeLevel int // Simulated stake (for Sybil resistance)
+	StakeLevel int
 	LastPing   time.Time
 }
 
@@ -25,7 +25,25 @@ var validators = map[string]*ValidatorProfile{
 }
 
 const baseThreshold = 0.5
-const authTimeout = 90 * time.Second // max time without ping
+const authTimeout = 90 * time.Second
+
+// External proof interface
+type ExternalProofProvider interface {
+	VerifyZK(publicKey string) bool
+	RunMPC(nodeCount int) bool
+}
+
+type SimulatedProofProvider struct{}
+
+func (p *SimulatedProofProvider) VerifyZK(publicKey string) bool {
+	return verifyZKProof(publicKey)
+}
+
+func (p *SimulatedProofProvider) RunMPC(nodeCount int) bool {
+	return simulateMPC(nodeCount)
+}
+
+var proofProvider ExternalProofProvider = &SimulatedProofProvider{}
 
 func mineBlock(block Block) int {
 	const difficulty = 4
@@ -58,7 +76,7 @@ func dBFTConsensus(block Block) bool {
 			fmt.Printf("%s failed auth (stale ping)\n", id)
 			continue
 		}
-		if !verifyZKProof(v.PublicKey) {
+		if !proofProvider.VerifyZK(v.PublicKey) {
 			fmt.Printf("%s failed cryptographic check\n", id)
 			continue
 		}
@@ -66,6 +84,7 @@ func dBFTConsensus(block Block) bool {
 		randomInput := fmt.Sprintf("%s:%s", id, block.Hash)
 		randomHash := sha256.Sum256([]byte(randomInput))
 		randomScore := float64(randomHash[0]) / 255.0
+		vrfOutput := fmt.Sprintf("%x", randomHash)
 
 		trustFactor := v.Trust * 0.7
 		historyBoost := float64(v.History) * 0.05
@@ -74,20 +93,23 @@ func dBFTConsensus(block Block) bool {
 		effectiveScore := trustFactor + historyBoost + randomBoost
 		vote := effectiveScore > 0.6
 
+		stakeWeight := float64(v.StakeLevel) / 3.0
+		weightedTrust := v.Trust * stakeWeight
+
 		totalTrust += v.Trust
 		trustValues = append(trustValues, v.Trust)
 		totalVotes++
 
 		if vote {
-			fmt.Printf("%s voted ✅ (effective: %.2f)\n", id, effectiveScore)
-			approvedTrust += v.Trust
+			fmt.Printf("%s voted ✅ (score: %.2f, vrf: %s)\n", id, effectiveScore, vrfOutput[:8])
+			approvedTrust += weightedTrust
 			v.History++
 		} else {
-			fmt.Printf("%s voted ❌ (effective: %.2f)\n", id, effectiveScore)
+			fmt.Printf("%s voted ❌ (score: %.2f, vrf: %s) ❌ REJECTED\n", id, effectiveScore, vrfOutput[:8])
 			maliciousVotes++
 			v.History--
 			if v.History < -3 {
-				v.Trust *= 0.9 // Penalize malicious behavior
+				v.Trust *= 0.9
 			}
 		}
 	}
@@ -103,14 +125,12 @@ func dBFTConsensus(block Block) bool {
 
 	fmt.Printf("Approval Ratio: %.2f | Required: %.2f\n", ratio, dynamicThreshold)
 
-	// 🛡️ Defensive mechanism: if >60% malicious votes, reject
 	if totalVotes > 0 && float64(maliciousVotes)/float64(totalVotes) > 0.6 {
 		fmt.Println("Consensus failed: majority of validators likely malicious.")
 		return false
 	}
 
-	// 🤝 Simulated MPC agreement (simplified)
-	if simulateMPC(totalVotes) {
+	if proofProvider.RunMPC(totalVotes) {
 		fmt.Println("MPC agreement confirmed.")
 	} else {
 		fmt.Println("MPC failure.")
@@ -120,18 +140,15 @@ func dBFTConsensus(block Block) bool {
 	return ratio >= dynamicThreshold
 }
 
-// Simulated MPC agreement (simplified)
+// Simulated MPC agreement
 func simulateMPC(validators int) bool {
-	return rand.Float64() < 0.95 // 95% chance of agreement
+	return rand.Float64() < 0.95
 }
 
-// ZK proof verification (simulated)
+// Simulated ZK proof verification
 func verifyZKProof(publicKey string) bool {
-	// Simulate public key mapping to a deterministic value
 	hash := sha256.Sum256([]byte(publicKey))
 	value := int(hash[0]) + int(hash[1]) + int(hash[2])
-
-	// If the value modulo 10 is less than 9, consider it valid (90% pass rate)
 	return value%10 < 9
 }
 

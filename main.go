@@ -30,6 +30,8 @@ func createGenesisBlock() Block {
 }
 
 func main() {
+	initAMQFilters()
+
 	// Initialize shards with genesis blocks
 	for i := 0; i < shardCount; i++ {
 		genesis := createGenesisBlock()
@@ -67,4 +69,21 @@ func main() {
 
 	// Synchronize shards to update Merkle roots
 	synchronizeShards()
+
+	// Check AMQ presence
+	hash := merkleForest[0].Blocks[0].Hash
+	fmt.Println("Is genesis in AMQ of Shard 0?", isInAMQ(0, hash))
+
+	// Show compressed Merkle proof
+	compressed := compressMerkleProof(proof)
+	fmt.Println("Compressed Merkle Proof:", compressed)
+
+	// Show accumulator snapshot
+	snapshot := getAccumulatorSnapshot(0)
+	fmt.Println("Accumulator Snapshot (Shard 0):", snapshot)
+	// Simulate vector clock updates
+	applyVectorClocks()
+
+	// Conflict resolution simulation
+	resolveConflicts()
 }
